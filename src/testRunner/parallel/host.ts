@@ -1,23 +1,19 @@
-// tslint:disable no-unnecessary-type-assertion (TODO: tslint can't find node types)
-
 namespace Harness.Parallel.Host {
     export function start() {
-        // tslint:disable-next-line:variable-name
         const Mocha = require("mocha") as typeof import("mocha");
         const Base = Mocha.reporters.Base;
         const color = Base.color;
         const cursor = Base.cursor;
-        const ms = require("mocha/lib/ms") as typeof import("mocha/lib/ms");
+        const ms = require("ms") as typeof import("ms");
         const readline = require("readline") as typeof import("readline");
         const os = require("os") as typeof import("os");
         const tty = require("tty") as typeof import("tty");
         const isatty = tty.isatty(1) && tty.isatty(2);
         const path = require("path") as typeof import("path");
         const { fork } = require("child_process") as typeof import("child_process");
-        const { statSync } = require("fs") as typeof import("fs");
+        const { statSync, readFileSync } = require("fs") as typeof import("fs");
 
         // NOTE: paths for module and types for FailedTestReporter _do not_ line up due to our use of --outFile for run.js
-        // tslint:disable-next-line:variable-name
         const FailedTestReporter = require(path.resolve(__dirname, "../../scripts/failed-tests")) as typeof import("../../../scripts/failed-tests");
 
         const perfdataFileNameFragment = ".parallelperf";
@@ -28,9 +24,7 @@ namespace Harness.Parallel.Host {
         let totalCost = 0;
 
         class RemoteSuite extends Mocha.Suite {
-            suites: RemoteSuite[];
             suiteMap = ts.createMap<RemoteSuite>();
-            tests: RemoteTest[];
             constructor(title: string) {
                 super(title);
                 this.pending = false;
@@ -51,7 +45,7 @@ namespace Harness.Parallel.Host {
             constructor(info: ErrorInfo | TestInfo) {
                 super(info.name[info.name.length - 1]);
                 this.info = info;
-                this.state = "error" in info ? "failed" : "passed";
+                this.state = "error" in info ? "failed" : "passed"; // eslint-disable-line no-in-operator
                 this.pending = false;
             }
         }
@@ -153,7 +147,7 @@ namespace Harness.Parallel.Host {
                 }
 
                 cursor.hide();
-                readline.moveCursor(process.stdout, -process.stdout.columns!, -this._lineCount);
+                readline.moveCursor(process.stdout, -process.stdout.columns, -this._lineCount);
                 let lineCount = 0;
                 const numProgressBars = this._progressBars.length;
                 for (let i = 0; i < numProgressBars; i++) {
@@ -162,7 +156,7 @@ namespace Harness.Parallel.Host {
                         process.stdout.write(this._progressBars[i].text + os.EOL);
                     }
                     else {
-                        readline.moveCursor(process.stdout, -process.stdout.columns!, +1);
+                        readline.moveCursor(process.stdout, -process.stdout.columns, +1);
                     }
 
                     lineCount++;
@@ -192,12 +186,37 @@ namespace Harness.Parallel.Host {
             return `tsrunner-${runner}://${test}`;
         }
 
+        function skipCostlyTests(tasks: Task[]) {
+            if (statSync("tests/.test-cost.json")) {
+                const costs = JSON.parse(readFileSync("tests/.test-cost.json", "utf8")) as {
+                    totalTime: number,
+                    totalEdits: number,
+                    data: { name: string, time: number, edits: number, costs: number }[]
+                };
+                let skippedEdits = 0;
+                let skippedTime = 0;
+                const skippedTests = new Set<string>();
+                let i = 0;
+                for (; i < costs.data.length && (skippedEdits / costs.totalEdits) < (skipPercent / 100); i++) {
+                    skippedEdits += costs.data[i].edits;
+                    skippedTime += costs.data[i].time;
+                    skippedTests.add(costs.data[i].name);
+                }
+                console.log(`Skipped ${i} expensive tests; estimated time savings of ${(skippedTime / costs.totalTime * 100).toFixed(2)}% with --skipPercent=${skipPercent.toFixed(2)} chance of missing a test.`);
+                return tasks.filter(t => !skippedTests.has(t.file));
+            }
+            else {
+                console.log("No cost analysis discovered.");
+                return tasks;
+            }
+        }
+
         function startDelayed(perfData: { [testHash: string]: number } | undefined, totalCost: number) {
             console.log(`Discovered ${tasks.length} unittest suites` + (newTasks.length ? ` and ${newTasks.length} new suites.` : "."));
             console.log("Discovering runner-based tests...");
             const discoverStart = +(new Date());
             for (const runner of runners) {
-                for (const test of runner.enumerateTestFiles()) {
+                for (const test of runner.getTestFiles()) {
                     const file = typeof test === "string" ? test : test.file;
                     let size: number;
                     if (!perfData) {
@@ -231,6 +250,7 @@ namespace Harness.Parallel.Host {
             }
             tasks.sort((a, b) => a.size - b.size);
             tasks = tasks.concat(newTasks);
+            tasks = skipCostlyTests(tasks);
             const batchCount = workerCount;
             const packfraction = 0.9;
             const chunkSize = 1000; // ~1KB or 1s for sending batches near the end of a test
@@ -269,8 +289,8 @@ namespace Harness.Parallel.Host {
                     worker.accumulatedOutput += d.toString();
                     console.log(`[Worker ${i}]`, d.toString());
                 };
-                worker.process.stderr.on("data", appendOutput);
-                worker.process.stdout.on("data", appendOutput);
+                worker.process.stderr!.on("data", appendOutput);
+                worker.process.stdout!.on("data", appendOutput);
                 const killChild = (timeout: TaskTimeout) => {
                     worker.process.kill();
                     console.error(`Worker exceeded ${timeout.duration}ms timeout ${worker.currentTasks && worker.currentTasks.length ? `while running test '${worker.currentTasks[0].file}'.` : `during test setup.`}`);
@@ -297,11 +317,15 @@ namespace Harness.Parallel.Host {
                             return process.exit(2);
                         }
                         case "timeout": {
-                            if (worker.timer) clearTimeout(worker.timer);
+                            if (worker.timer) {
+                                // eslint-disable-next-line no-restricted-globals
+                                clearTimeout(worker.timer);
+                            }
                             if (data.payload.duration === "reset") {
                                 worker.timer = undefined;
                             }
                             else {
+                                // eslint-disable-next-line no-restricted-globals
                                 worker.timer = setTimeout(killChild, data.payload.duration, data.payload);
                             }
                             break;
@@ -503,10 +527,10 @@ namespace Harness.Parallel.Host {
                 function replaySuite(runner: Mocha.Runner, suite: RemoteSuite) {
                     runner.emit("suite", suite);
                     for (const test of suite.tests) {
-                        replayTest(runner, test);
+                        replayTest(runner, test as RemoteTest);
                     }
                     for (const child of suite.suites) {
-                        replaySuite(runner, child);
+                        replaySuite(runner, child as RemoteSuite);
                     }
                     runner.emit("suite end", suite);
                 }
@@ -514,7 +538,7 @@ namespace Harness.Parallel.Host {
                 function replayTest(runner: Mocha.Runner, test: RemoteTest) {
                     runner.emit("test", test);
                     if (test.isFailed()) {
-                        runner.emit("fail", test, "error" in test.info ? rebuildError(test.info) : new Error("Unknown error"));
+                        runner.emit("fail", test, "error" in test.info ? rebuildError(test.info) : new Error("Unknown error")); // eslint-disable-line no-in-operator
                     }
                     else {
                         runner.emit("pass", test);
@@ -529,31 +553,31 @@ namespace Harness.Parallel.Host {
 
                 const replayRunner = new Mocha.Runner(new Mocha.Suite(""), /*delay*/ false);
                 replayRunner.started = true;
+                const createStatsCollector = require("mocha/lib/stats-collector");
+                createStatsCollector(replayRunner); // manually init stats collector like mocha.run would
 
                 const consoleReporter = new Base(replayRunner);
                 patchStats(consoleReporter.stats);
 
                 let xunitReporter: import("mocha").reporters.XUnit | undefined;
                 let failedTestReporter: import("../../../scripts/failed-tests") | undefined;
-                if (Utils.getExecutionEnvironment() !== Utils.ExecutionEnvironment.Browser) {
-                    if (process.env.CI === "true") {
-                        xunitReporter = new Mocha.reporters.XUnit(replayRunner, {
-                            reporterOptions: {
-                                suiteName: "Tests",
-                                output: "./TEST-results.xml"
-                            }
-                        });
-                        patchStats(xunitReporter.stats);
-                        xunitReporter.write(`<?xml version="1.0" encoding="UTF-8"?>\n`);
-                    }
-                    else {
-                        failedTestReporter = new FailedTestReporter(replayRunner, {
-                            reporterOptions: {
-                                file: path.resolve(".failed-tests"),
-                                keepFailed
-                            }
-                        });
-                    }
+                if (process.env.CI === "true") {
+                    xunitReporter = new Mocha.reporters.XUnit(replayRunner, {
+                        reporterOptions: {
+                            suiteName: "Tests",
+                            output: "./TEST-results.xml"
+                        }
+                    });
+                    patchStats(xunitReporter.stats);
+                    xunitReporter.write(`<?xml version="1.0" encoding="UTF-8"?>\n`);
+                }
+                else {
+                    failedTestReporter = new FailedTestReporter(replayRunner, {
+                        reporterOptions: {
+                            file: path.resolve(".failed-tests"),
+                            keepFailed
+                        }
+                    });
                 }
 
                 const savedUseColors = Base.useColors;
@@ -565,7 +589,8 @@ namespace Harness.Parallel.Host {
                 consoleReporter.epilogue();
                 if (noColors) Base.useColors = savedUseColors;
 
-                IO.writeFile(perfdataFileName(configOption), JSON.stringify(newPerfData, null, 4)); // tslint:disable-line:no-null-keyword
+                // eslint-disable-next-line no-null/no-null
+                IO.writeFile(perfdataFileName(configOption), JSON.stringify(newPerfData, null, 4));
 
                 if (xunitReporter) {
                     xunitReporter.done(errorResults.length, failures => process.exit(failures));
@@ -599,6 +624,7 @@ namespace Harness.Parallel.Host {
 
             const perfData = readSavedPerfData(configOption);
             context.describe = addSuite as Mocha.SuiteFunction;
+            context.it = addSuite as Mocha.TestFunction;
 
             function addSuite(title: string) {
                 // Note, sub-suites are not indexed (we assume such granularity is not required)
@@ -623,6 +649,7 @@ namespace Harness.Parallel.Host {
             shimNoopTestInterface(global);
         }
 
+        // eslint-disable-next-line no-restricted-globals
         setTimeout(() => startDelayed(perfData, totalCost), 0); // Do real startup on next tick, so all unit tests have been collected
     }
 }

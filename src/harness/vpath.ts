@@ -21,8 +21,8 @@ namespace vpath {
     export import relative = ts.getRelativePathFromDirectory;
     export import beneath = ts.containsPath;
     export import changeExtension = ts.changeAnyExtension;
-    export import isTypeScript = ts.hasTypeScriptFileExtension;
-    export import isJavaScript = ts.hasJavaScriptFileExtension;
+    export import isTypeScript = ts.hasTSFileExtension;
+    export import isJavaScript = ts.hasJSFileExtension;
 
     const invalidRootComponentRegExp = /^(?!(\/|\/\/\w+\/|[a-zA-Z]:\/?|)$)/;
     const invalidNavigableComponentRegExp = /[:*?"<>|]/;
@@ -115,7 +115,7 @@ namespace vpath {
         return extname(path, ".map", /*ignoreCase*/ false).length > 0;
     }
 
-    const javaScriptSourceMapExtensions: ReadonlyArray<string> = [".js.map", ".jsx.map"];
+    const javaScriptSourceMapExtensions: readonly string[] = [".js.map", ".jsx.map"];
 
     export function isJavaScriptSourceMap(path: string) {
         return extname(path, javaScriptSourceMapExtensions, /*ignoreCase*/ false).length > 0;

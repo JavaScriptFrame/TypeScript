@@ -1,6 +1,5 @@
 /* @internal */
 namespace ts.server {
-    // tslint:disable variable-name
     export const ActionSet: ActionSet = "action::set";
     export const ActionInvalidate: ActionInvalidate = "action::invalidate";
     export const ActionPackageInstalled: ActionPackageInstalled = "action::packageInstalled";
@@ -20,6 +19,11 @@ namespace ts.server {
          * typingsInstaller will run the command with `${npmLocation} install ...`.
          */
         export const NpmLocation = "--npmLocation";
+        /**
+         * Flag indicating that the typings installer should try to validate the default npm location.
+         * If the default npm is not found when this flag is enabled, fallback to `npm install`
+         */
+        export const ValidateDefaultNpmLocation = "--validateDefaultNpmLocation";
     }
 
     export function hasArgument(argumentName: string) {
@@ -33,7 +37,6 @@ namespace ts.server {
             : undefined;
     }
 
-    /*@internal*/
     export function nowString() {
         // E.g. "12:34:56.789"
         const d = new Date();

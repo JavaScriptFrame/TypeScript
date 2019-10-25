@@ -3,12 +3,15 @@ namespace ts.server {
         writeMessage(message: string): void;
     }
 
-    interface RenameEntry extends RenameInfo {
-        fileName: string;
-        position: number;
-        locations: RenameLocation[];
-        findInStrings: boolean;
-        findInComments: boolean;
+    interface RenameEntry {
+        readonly renameInfo: RenameInfo;
+        readonly inputs: {
+            readonly fileName: string;
+            readonly position: number;
+            readonly findInStrings: boolean;
+            readonly findInComments: boolean;
+        };
+        readonly locations: RenameLocation[];
     }
 
     /* @internal */
@@ -34,7 +37,7 @@ namespace ts.server {
         private sequence = 0;
         private lineMaps: Map<number[]> = createMap<number[]>();
         private messages: string[] = [];
-        private lastRenameEntry: RenameEntry;
+        private lastRenameEntry: RenameEntry | undefined;
 
         constructor(private host: SessionClientHost) {
         }
@@ -87,7 +90,7 @@ namespace ts.server {
             return <T>request;
         }
 
-        private processResponse<T extends protocol.Response>(request: protocol.Request): T {
+        private processResponse<T extends protocol.Response>(request: protocol.Request, expectEmptyBody = false): T {
             let foundResponseMessage = false;
             let response!: T;
             while (!foundResponseMessage) {
@@ -115,9 +118,17 @@ namespace ts.server {
                 throw new Error("Error " + response.message);
             }
 
-            Debug.assert(!!response.body, "Malformed response: Unexpected empty response body.");
+            Debug.assert(expectEmptyBody || !!response.body, "Malformed response: Unexpected empty response body.");
+            Debug.assert(!expectEmptyBody || !response.body, "Malformed response: Unexpected non-empty response body.");
 
             return response;
+        }
+
+        /*@internal*/
+        configure(preferences: UserPreferences) {
+            const args: protocol.ConfigureRequestArguments = { preferences };
+            const request = this.processRequest(CommandNames.Configure, args);
+            this.processResponse(request, /*expectEmptyBody*/ true);
         }
 
         openFile(file: string, fileContent?: string, scriptKindName?: "TS" | "JS" | "TSX" | "JSX"): void {
@@ -130,11 +141,13 @@ namespace ts.server {
             this.processRequest(CommandNames.Close, args);
         }
 
-        changeFile(fileName: string, start: number, end: number, insertString: string): void {
+        createChangeFileRequestArgs(fileName: string, start: number, end: number, insertString: string): protocol.ChangeRequestArgs {
+            return { ...this.createFileLocationRequestArgsWithEndLineAndOffset(fileName, start, end), insertString };
+        }
+
+        changeFile(fileName: string, args: protocol.ChangeRequestArgs): void {
             // clear the line map after an edit
             this.lineMaps.set(fileName, undefined!); // TODO: GH#18217
-
-            const args: protocol.ChangeRequestArgs = { ...this.createFileLocationRequestArgsWithEndLineAndOffset(fileName, start, end), insertString };
             this.processRequest(CommandNames.Change, args);
         }
 
@@ -277,7 +290,7 @@ namespace ts.server {
             const args: protocol.FileLocationRequestArgs = this.createFileLocationRequestArgs(fileName, position);
 
             const request = this.processRequest<protocol.DefinitionRequest>(CommandNames.DefinitionAndBoundSpan, args);
-            const response = this.processResponse<protocol.DefinitionInfoAndBoundSpanReponse>(request);
+            const response = this.processResponse<protocol.DefinitionInfoAndBoundSpanResponse>(request);
             const body = Debug.assertDefined(response.body); // TODO: GH#18217
 
             return {
@@ -381,7 +394,8 @@ namespace ts.server {
             return notImplemented();
         }
 
-        getRenameInfo(fileName: string, position: number, findInStrings?: boolean, findInComments?: boolean): RenameInfo {
+        getRenameInfo(fileName: string, position: number, _options?: RenameInfoOptions, findInStrings?: boolean, findInComments?: boolean): RenameInfo {
+            // Not passing along 'options' because server should already have those from the 'configure' command
             const args: protocol.RenameRequestArgs = { ...this.createFileLocationRequestArgs(fileName, position), findInStrings, findInComments };
 
             const request = this.processRequest<protocol.RenameRequest>(CommandNames.Rename, args);
@@ -390,37 +404,56 @@ namespace ts.server {
             const locations: RenameLocation[] = [];
             for (const entry of body.locs) {
                 const fileName = entry.file;
-                for (const loc of entry.locs) {
-                    locations.push({ textSpan: this.decodeSpan(loc, fileName), fileName });
+                for (const { start, end, contextStart, contextEnd, ...prefixSuffixText } of entry.locs) {
+                    locations.push({
+                        textSpan: this.decodeSpan({ start, end }, fileName),
+                        fileName,
+                        ...(contextStart !== undefined ?
+                            { contextSpan: this.decodeSpan({ start: contextStart, end: contextEnd! }, fileName) } :
+                            undefined),
+                        ...prefixSuffixText
+                    });
                 }
             }
 
-            return this.lastRenameEntry = {
-                canRename: body.info.canRename,
-                displayName: body.info.displayName,
-                fullDisplayName: body.info.fullDisplayName,
-                kind: body.info.kind,
-                kindModifiers: body.info.kindModifiers,
-                localizedErrorMessage: body.info.localizedErrorMessage,
-                triggerSpan: createTextSpanFromBounds(position, position),
-                fileName,
-                position,
-                findInStrings: !!findInStrings,
-                findInComments: !!findInComments,
+            const renameInfo = body.info.canRename
+                ? identity<RenameInfoSuccess>({
+                    canRename: body.info.canRename,
+                    fileToRename: body.info.fileToRename,
+                    displayName: body.info.displayName,
+                    fullDisplayName: body.info.fullDisplayName,
+                    kind: body.info.kind,
+                    kindModifiers: body.info.kindModifiers,
+                    triggerSpan: createTextSpanFromBounds(position, position),
+                })
+                : identity<RenameInfoFailure>({ canRename: false, localizedErrorMessage: body.info.localizedErrorMessage });
+            this.lastRenameEntry = {
+                renameInfo,
+                inputs: {
+                    fileName,
+                    position,
+                    findInStrings: !!findInStrings,
+                    findInComments: !!findInComments,
+                },
                 locations,
             };
+            return renameInfo;
+        }
+
+        getSmartSelectionRange() {
+            return notImplemented();
         }
 
         findRenameLocations(fileName: string, position: number, findInStrings: boolean, findInComments: boolean): RenameLocation[] {
             if (!this.lastRenameEntry ||
-                this.lastRenameEntry.fileName !== fileName ||
-                this.lastRenameEntry.position !== position ||
-                this.lastRenameEntry.findInStrings !== findInStrings ||
-                this.lastRenameEntry.findInComments !== findInComments) {
-                this.getRenameInfo(fileName, position, findInStrings, findInComments);
+                this.lastRenameEntry.inputs.fileName !== fileName ||
+                this.lastRenameEntry.inputs.position !== position ||
+                this.lastRenameEntry.inputs.findInStrings !== findInStrings ||
+                this.lastRenameEntry.inputs.findInComments !== findInComments) {
+                this.getRenameInfo(fileName, position, { allowRenameOfImportPath: true }, findInStrings, findInComments);
             }
 
-            return this.lastRenameEntry.locations;
+            return this.lastRenameEntry!.locations;
         }
 
         private decodeNavigationBarItems(items: protocol.NavigationBarItem[] | undefined, fileName: string, lineMap: number[]): NavigationBarItem[] {
@@ -564,7 +597,7 @@ namespace ts.server {
             return notImplemented();
         }
 
-        getCodeFixesAtPosition(file: string, start: number, end: number, errorCodes: ReadonlyArray<number>): ReadonlyArray<CodeFixAction> {
+        getCodeFixesAtPosition(file: string, start: number, end: number, errorCodes: readonly number[]): readonly CodeFixAction[] {
             const args: protocol.CodeFixRequestArgs = { ...this.createFileRangeRequestArgs(file, start, end), errorCodes };
 
             const request = this.processRequest<protocol.CodeFixRequest>(CommandNames.GetCodeFixes, args);
@@ -642,7 +675,7 @@ namespace ts.server {
             };
         }
 
-        organizeImports(_scope: OrganizeImportsScope, _formatOptions: FormatCodeSettings): ReadonlyArray<FileTextChanges> {
+        organizeImports(_scope: OrganizeImportsScope, _formatOptions: FormatCodeSettings): readonly FileTextChanges[] {
             return notImplemented();
         }
 
@@ -681,6 +714,11 @@ namespace ts.server {
             const response = this.processResponse<protocol.BraceResponse>(request);
 
             return response.body!.map(entry => this.decodeSpan(entry, fileName)); // TODO: GH#18217
+        }
+
+        configurePlugin(pluginName: string, configuration: any): void {
+            const request = this.processRequest<protocol.ConfigurePluginRequest>("configurePlugin", { pluginName, configuration });
+            this.processResponse<protocol.ConfigurePluginResponse>(request, /*expectEmptyBody*/ true);
         }
 
         getIndentationAtPosition(_fileName: string, _position: number, _options: EditorOptions): number {

@@ -1,4 +1,5 @@
-// tslint:disable no-invalid-template-strings (lots of tests use quoted code)
+// lots of tests use quoted code
+/* eslint-disable no-template-curly-in-string */
 
 interface ClassificationEntry {
     value: any;
@@ -6,7 +7,7 @@ interface ClassificationEntry {
     position?: number;
 }
 
-describe("Colorization", () => {
+describe("unittests:: services:: Colorization", () => {
     // Use the shim adapter to ensure test coverage of the shim layer for the classifier
     const languageServiceAdapter = new Harness.LanguageService.ShimLanguageServiceAdapter(/*preprocessToResolve*/ false);
     const classifier = languageServiceAdapter.getClassifier();
@@ -57,7 +58,7 @@ describe("Colorization", () => {
 
     describe("test getClassifications", () => {
         it("Returns correct token classes", () => {
-            testLexicalClassification("var x: string = \"foo\"; //Hello",
+            testLexicalClassification("var x: string = \"foo\" ?? \"bar\"; //Hello",
                 ts.EndOfLineState.None,
                 keyword("var"),
                 whitespace(" "),
@@ -65,6 +66,9 @@ describe("Colorization", () => {
                 punctuation(":"),
                 keyword("string"),
                 operator("="),
+                stringLiteral("\"foo\""),
+                whitespace(" "),
+                operator("??"),
                 stringLiteral("\"foo\""),
                 comment("//Hello"),
                 punctuation(";"));
@@ -384,7 +388,7 @@ describe("Colorization", () => {
         it("LexicallyClassifiesConflictTokens", () => {
             // Test conflict markers.
             testLexicalClassification(
-"class C {\r\n\
+                "class C {\r\n\
 <<<<<<< HEAD\r\n\
     v = 1;\r\n\
 =======\r\n\
@@ -406,7 +410,7 @@ describe("Colorization", () => {
                 finalEndOfLineState(ts.EndOfLineState.None));
 
             testLexicalClassification(
-"<<<<<<< HEAD\r\n\
+                "<<<<<<< HEAD\r\n\
 class C { }\r\n\
 =======\r\n\
 class D { }\r\n\
@@ -422,7 +426,7 @@ class D { }\r\n\
                 finalEndOfLineState(ts.EndOfLineState.None));
 
             testLexicalClassification(
-"class C {\r\n\
+                "class C {\r\n\
 <<<<<<< HEAD\r\n\
     v = 1;\r\n\
 ||||||| merged common ancestors\r\n\
@@ -447,7 +451,7 @@ class D { }\r\n\
                 finalEndOfLineState(ts.EndOfLineState.None));
 
             testLexicalClassification(
-"<<<<<<< HEAD\r\n\
+                "<<<<<<< HEAD\r\n\
 class C { }\r\n\
 ||||||| merged common ancestors\r\n\
 class E { }\r\n\

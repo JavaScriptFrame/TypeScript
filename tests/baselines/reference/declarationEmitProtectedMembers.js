@@ -56,7 +56,7 @@ var __extends = (this && this.__extends) || (function () {
             ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
             function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
         return extendStatics(d, b);
-    }
+    };
     return function (d, b) {
         extendStatics(d, b);
         function __() { this.constructor = d; }
@@ -138,11 +138,12 @@ var C4 = /** @class */ (function () {
 declare class C1 {
     protected x: number;
     protected f(): number;
-    protected accessor: number;
+    protected set accessor(a: number);
+    protected get accessor(): number;
     protected static sx: number;
     protected static sf(): number;
-    protected static staticSetter: number;
-    protected static readonly staticGetter: number;
+    protected static set staticSetter(a: number);
+    protected static get staticGetter(): number;
 }
 declare class C2 extends C1 {
     protected f(): number;
@@ -153,7 +154,7 @@ declare class C3 extends C2 {
     static sx: number;
     f(): number;
     static sf(): number;
-    static readonly staticGetter: number;
+    static get staticGetter(): number;
 }
 declare class C4 {
     protected a: number;
